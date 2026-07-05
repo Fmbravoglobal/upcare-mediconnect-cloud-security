@@ -114,7 +114,7 @@ resource "aws_db_instance" "phi" {
   storage_encrypted = true
   kms_key_id        = var.kms_key_arn
 
-  db_subnet_group_name  = aws_db_subnet_group.this.name
+  db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.db.id]
   publicly_accessible    = false # never — PHI tier has no public endpoint (ADR 0001/0002)
 
@@ -136,12 +136,12 @@ resource "aws_db_instance" "phi" {
   performance_insights_retention_period = 7
 
   # Audit & durability
-  backup_retention_period = 35 # HIPAA-conscious retention window; adjust per BAA/org policy
-  deletion_protection     = true
+  backup_retention_period         = 35 # HIPAA-conscious retention window; adjust per BAA/org policy
+  deletion_protection             = true
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
-  copy_tags_to_snapshot    = true
-  skip_final_snapshot      = false
-  final_snapshot_identifier = "upcare-${var.environment}-ehr-db-final"
+  copy_tags_to_snapshot           = true
+  skip_final_snapshot             = false
+  final_snapshot_identifier       = "upcare-${var.environment}-ehr-db-final"
 
   # In-transit encryption enforced at the parameter-group level (force_ssl=1) — see variable note below
   parameter_group_name = aws_db_parameter_group.phi_ssl_enforced.name
