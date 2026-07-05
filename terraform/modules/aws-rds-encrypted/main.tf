@@ -37,6 +37,29 @@ variable "multi_az" {
   default     = true
 }
 
+resource "aws_iam_role" "rds_enhanced_monitoring" {
+  name = "upcare-${var.environment}-rds-monitoring-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "monitoring.rds.amazonaws.com" }
+    }]
+  })
+
+  tags = {
+    Project     = "upcare-mediconnect"
+    Environment = var.environment
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "rds_enhanced_monitoring" {
+  role       = aws_iam_role.rds_enhanced_monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+}
+
 resource "aws_db_subnet_group" "this" {
   name       = "upcare-${var.environment}-data-subnet-group"
   subnet_ids = var.data_subnet_ids
@@ -62,6 +85,9 @@ resource "aws_security_group" "db" {
   }
 
   egress {
+    # checkov:skip=CKV_AWS_382: cidr_blocks is intentionally empty — this rule permits
+    # no egress traffic at all. Checkov flags protocol "-1" regardless of an empty
+    # cidr_blocks list; an empty list is not equivalent to 0.0.0.0/0.
     description = "No outbound required from data tier"
     from_port   = 0
     to_port     = 0
@@ -88,19 +114,34 @@ resource "aws_db_instance" "phi" {
   storage_encrypted = true
   kms_key_id        = var.kms_key_arn
 
-  db_subnet_group_name   = aws_db_subnet_group.this.name
+  db_subnet_group_name  = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.db.id]
   publicly_accessible    = false # never — PHI tier has no public endpoint (ADR 0001/0002)
 
   multi_az = var.multi_az
 
+  # Enhanced monitoring — CKV_AWS_118
+  monitoring_interval = 60
+  monitoring_role_arn = aws_iam_role.rds_enhanced_monitoring.arn
+
+  # Auto minor version upgrades — CKV_AWS_226 — patches applied automatically during maintenance window
+  auto_minor_version_upgrade = true
+
+  # IAM database authentication — CKV_AWS_161 — allows IAM-based auth alongside password auth
+  iam_database_authentication_enabled = true
+
+  # Performance Insights, encrypted with the same customer-managed key — CKV_AWS_353
+  performance_insights_enabled          = true
+  performance_insights_kms_key_id       = var.kms_key_arn
+  performance_insights_retention_period = 7
+
   # Audit & durability
-  backup_retention_period         = 35 # HIPAA-conscious retention window; adjust per BAA/org policy
-  deletion_protection             = true
+  backup_retention_period = 35 # HIPAA-conscious retention window; adjust per BAA/org policy
+  deletion_protection     = true
   enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
-  copy_tags_to_snapshot           = true
-  skip_final_snapshot             = false
-  final_snapshot_identifier       = "upcare-${var.environment}-ehr-db-final"
+  copy_tags_to_snapshot    = true
+  skip_final_snapshot      = false
+  final_snapshot_identifier = "upcare-${var.environment}-ehr-db-final"
 
   # In-transit encryption enforced at the parameter-group level (force_ssl=1) — see variable note below
   parameter_group_name = aws_db_parameter_group.phi_ssl_enforced.name

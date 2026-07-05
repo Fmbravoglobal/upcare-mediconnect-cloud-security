@@ -31,8 +31,8 @@ locals {
 
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+  enable_dns_support    = true
+  enable_dns_hostnames  = true
 
   tags = merge(local.common_tags, { Name = "upcare-${var.environment}-vpc" })
 }
@@ -74,6 +74,9 @@ resource "aws_internet_gateway" "this" {
 }
 
 resource "aws_eip" "nat" {
+  # checkov:skip=CKV2_AWS_19: this EIP is attached to a NAT Gateway (see aws_nat_gateway.this
+  # below), not directly to an EC2 instance. Checkov's EIP-attachment check only recognizes
+  # direct EC2 association; NAT Gateway attachment is the intended, standard pattern here.
   count  = length(var.azs)
   domain = "vpc"
   tags   = merge(local.common_tags, { Name = "upcare-${var.environment}-nat-eip-${count.index}" })
