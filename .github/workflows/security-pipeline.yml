@@ -1,0 +1,196 @@
+name: Security Pipeline — UpCare MediConnect Infra
+
+on:
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - 'cloudformation/**'
+      - 'policies/**'
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - 'cloudformation/**'
+
+env:
+  TF_VERSION: "1.6.6"
+
+jobs:
+
+  # 1. Lint & format check
+  lint:
+    name: Lint / Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform fmt check
+        run: terraform fmt -check -recursive terraform/
+      - name: tflint
+        uses: terraform-linters/setup-tflint@v4
+      - run: tflint --chdir=terraform/aws --recursive
+      - run: tflint --chdir=terraform/azure --recursive
+
+  # 2. SAST on IaC — Checkov (multi-cloud, also scans CloudFormation) + tfsec (Terraform-focused)
+  sast_iac:
+    name: SAST — IaC Security Scan
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkov (Terraform + CloudFormation)
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform,cloudformation
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: false # zero high/critical findings before merge, per Phase 2 requirement
+
+      - name: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: terraform/
+          soft_fail: false
+
+      - name: cfn-lint
+        run: |
+          pip install cfn-lint
+          cfn-lint cloudformation/*.yaml
+
+      - name: cfn-nag
+        uses: stelligent/cfn_nag@master
+        with:
+          input_path: cloudformation/
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov-results.sarif
+
+  # 3. Secret scanning
+  secret_scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_COMMENTS: "true"
+
+  # 4. Dependency / SCA scanning — app-adjacent deps that touch PHI systems (e.g., CI tooling, any bundled scripts)
+  sca:
+    name: Dependency Scanning (SCA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Snyk IaC & dependency scan
+        uses: snyk/actions/iac@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+
+  # 5. Policy gate — OPA/Conftest against the Terraform plan JSON
+  policy_gate:
+    name: Policy Gate (OPA/Conftest)
+    runs-on: ubuntu-latest
+    needs: [sast_iac, secret_scan]
+    strategy:
+      matrix:
+        cloud: [aws, azure]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform init (validate only, no backend creds needed for plan-format check)
+        working-directory: terraform/${{ matrix.cloud }}
+        run: terraform init -backend=false
+
+      - name: terraform plan (JSON output)
+        working-directory: terraform/${{ matrix.cloud }}
+        run: |
+          terraform plan -out=tfplan.binary
+          terraform show -json tfplan.binary > tfplan.json
+
+      - name: Install Conftest
+        run: |
+          wget https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_linux_x86_64.tar.gz
+          tar xzf conftest_linux_x86_64.tar.gz
+          sudo mv conftest /usr/local/bin
+
+      - name: Run policy gate
+        working-directory: terraform/${{ matrix.cloud }}
+        run: conftest test --policy ../../policies/opa tfplan.json --fail-on-warn
+
+  # 6. Manual approval gate before apply to prod (GitHub Environments protection rule handles the actual gate)
+  request_approval:
+    name: Manual Approval — Production Apply
+    runs-on: ubuntu-latest
+    needs: policy_gate
+    if: github.ref == 'refs/heads/main'
+    environment: production # configured in repo settings with required reviewers
+    steps:
+      - run: echo "Approved for production apply by required reviewer."
+
+  # 7. Apply (only after approval gate passes)
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: request_approval
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        cloud: [aws, azure]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform init
+        working-directory: terraform/${{ matrix.cloud }}
+        run: terraform init
+      - name: terraform apply
+        working-directory: terraform/${{ matrix.cloud }}
+        run: terraform apply -auto-approve
+
+  # 8. Post-deploy DAST baseline scan against staging
+  dast:
+    name: DAST — OWASP ZAP Baseline
+    runs-on: ubuntu-latest
+    needs: apply
+    steps:
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ secrets.STAGING_URL }}
+          fail_action: true
+
+  # 9. Compliance evidence export — bundle scan outputs as an auditable artifact
+  compliance_evidence:
+    name: Export Compliance Evidence
+    runs-on: ubuntu-latest
+    needs: [sast_iac, policy_gate, dast]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bundle evidence
+        run: |
+          mkdir -p compliance/evidence/${{ github.run_id }}
+          echo "Pipeline run: ${{ github.run_id }} on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > compliance/evidence/${{ github.run_id }}/summary.txt
+          echo "Commit: ${{ github.sha }}" >> compliance/evidence/${{ github.run_id }}/summary.txt
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-evidence-${{ github.run_id }}
+          path: compliance/evidence/${{ github.run_id }}
+          retention-days: 400 # exceeds 1-year HIPAA-conscious retention window

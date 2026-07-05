@@ -1,0 +1,23 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+.terraform.lock.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Secrets / credentials — never commit real values
+*.pem
+*.key
+.env
+.env.*
+
+# OS / editor junk
+.DS_Store
+.vscode/settings.json

@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  UpCare MediConnect - EHR Storage Tier (S3 for documents/attachments + KMS).
+  Parallel CloudFormation evidence alongside the Terraform AWS modules,
+  demonstrating cross-IaC-tool competency for the same security posture:
+  encrypted, private-by-default, audited.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+    Default: dev
+
+  LogRetentionDays:
+    Type: Number
+    Default: 365
+
+Resources:
+
+  # --- KMS key dedicated to EHR document storage (separate from DB encryption key) ---
+  EhrDocumentsKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub "UpCare ${Environment} - EHR document storage encryption key"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableRootAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+      Tags:
+        - Key: Project
+          Value: upcare-mediconnect
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: DataClass
+          Value: phi
+
+  EhrDocumentsKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/upcare-${Environment}-ehr-documents"
+      TargetKeyId: !Ref EhrDocumentsKmsKey
+
+  # --- S3 bucket for EHR attachments/documents (scans, referral letters, imaging metadata) ---
+  EhrDocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "upcare-${Environment}-ehr-documents-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref EhrDocumentsKmsKey
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled # protects against accidental/malicious overwrite or delete of PHI documents
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionOldVersionsToGlacier
+            Status: Enabled
+            NoncurrentVersionTransitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 90
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: "ehr-documents-access-logs/"
+      Tags:
+        - Key: Project
+          Value: upcare-mediconnect
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: DataClass
+          Value: phi
+
+  EhrDocumentsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EhrDocumentsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub "arn:aws:s3:::${EhrDocumentsBucket}"
+              - !Sub "arn:aws:s3:::${EhrDocumentsBucket}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+          - Sid: DenyUnencryptedObjectUploads
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:PutObject"
+            Resource: !Sub "arn:aws:s3:::${EhrDocumentsBucket}/*"
+            Condition:
+              StringNotEquals:
+                "s3:x-amz-server-side-encryption": "aws:kms"
+
+  # --- Access logging bucket (separate from the PHI bucket itself) ---
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "upcare-${Environment}-access-logs-${AWS::AccountId}"
+      AccessControl: LogDeliveryWrite
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldLogs
+            Status: Enabled
+            ExpirationInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: Project
+          Value: upcare-mediconnect
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  EhrDocumentsBucketName:
+    Value: !Ref EhrDocumentsBucket
+  EhrDocumentsKmsKeyArn:
+    Value: !GetAtt EhrDocumentsKmsKey.Arn
