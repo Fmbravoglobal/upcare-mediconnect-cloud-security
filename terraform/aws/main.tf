@@ -75,12 +75,12 @@ module "phi_kms" {
 # than hidden so this root module fails loudly instead of silently misconfiguring
 # the PHI database's ingress rule.
 module "phi_database" {
-  source                 = "../modules/aws-rds-encrypted"
-  environment             = var.environment
-  vpc_id                  = module.vpc.vpc_id
-  data_subnet_ids         = module.vpc.data_subnet_ids
-  app_security_group_id   = var.app_security_group_id # TODO: wire to compute module output once it exists
-  kms_key_arn             = module.phi_kms.key_arn
+  source                = "../modules/aws-rds-encrypted"
+  environment           = var.environment
+  vpc_id                = module.vpc.vpc_id
+  data_subnet_ids       = module.vpc.data_subnet_ids
+  app_security_group_id = var.app_security_group_id # TODO: wire to compute module output once it exists
+  kms_key_arn           = module.phi_kms.key_arn
 }
 
 output "vpc_id" {

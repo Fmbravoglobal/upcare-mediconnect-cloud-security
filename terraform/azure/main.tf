@@ -49,30 +49,30 @@ variable "sql_admin_password" {
 }
 
 module "network" {
-  source               = "../modules/azure-vnet"
-  environment          = var.environment
-  location             = var.location
-  resource_group_name  = var.resource_group_name
+  source              = "../modules/azure-vnet"
+  environment         = var.environment
+  location            = var.location
+  resource_group_name = var.resource_group_name
 }
 
 module "keyvault" {
   source              = "../modules/azure-keyvault"
-  environment          = var.environment
-  location             = var.location
-  resource_group_name  = var.resource_group_name
-  tenant_id            = var.tenant_id
-  phi_data_subnet_id   = module.network.phi_data_subnet_id
+  environment         = var.environment
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tenant_id           = var.tenant_id
+  phi_data_subnet_id  = module.network.phi_data_subnet_id
 }
 
 module "sql" {
-  source               = "../modules/azure-sql-encrypted"
-  environment           = var.environment
-  location              = var.location
-  resource_group_name   = var.resource_group_name
-  phi_data_subnet_id    = module.network.phi_data_subnet_id
-  key_vault_key_id      = module.keyvault.phi_key_id
-  admin_login            = var.sql_admin_login
-  admin_password          = var.sql_admin_password
+  source              = "../modules/azure-sql-encrypted"
+  environment         = var.environment
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  phi_data_subnet_id  = module.network.phi_data_subnet_id
+  key_vault_key_id    = module.keyvault.phi_key_id
+  admin_login         = var.sql_admin_login
+  admin_password      = var.sql_admin_password
 }
 
 output "phi_app_subnet_id" {

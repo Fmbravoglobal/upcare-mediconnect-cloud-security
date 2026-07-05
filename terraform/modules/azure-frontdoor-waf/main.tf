@@ -58,7 +58,7 @@ resource "azurerm_cdn_frontdoor_firewall_policy" "this" {
     match_condition {
       match_variable = "RequestUri"
       operator       = "Any"
-      match_values    = ["/*"]
+      match_values   = ["/*"]
     }
   }
 
@@ -90,10 +90,10 @@ resource "azurerm_cdn_frontdoor_origin_group" "this" {
 }
 
 resource "azurerm_cdn_frontdoor_origin" "this" {
-  name                          = "upcare-${var.environment}-origin"
-  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.this.id
-  host_name                     = var.backend_host
-  origin_host_header            = var.backend_host
+  name                           = "upcare-${var.environment}-origin"
+  cdn_frontdoor_origin_group_id  = azurerm_cdn_frontdoor_origin_group.this.id
+  host_name                      = var.backend_host
+  origin_host_header             = var.backend_host
   certificate_name_check_enabled = true
 }
 

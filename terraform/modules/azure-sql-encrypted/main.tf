@@ -39,7 +39,7 @@ resource "azurerm_mssql_server" "phi" {
   administrator_login_password = var.admin_password
 
   public_network_access_enabled = false # no public endpoint — private endpoint only (ADR 0001/0002)
-  minimum_tls_version            = "1.2"
+  minimum_tls_version           = "1.2"
 
   identity {
     type = "SystemAssigned" # required for customer-managed key access to Key Vault
@@ -93,10 +93,10 @@ resource "azurerm_private_endpoint" "sql" {
 
 # Audit logging to satisfy HIPAA §164.312(b) — all queries against PHI logged
 resource "azurerm_mssql_server_extended_auditing_policy" "phi" {
-  server_id                              = azurerm_mssql_server.phi.id
-  storage_endpoint                       = null # wire to a storage account output from a logging module in Phase 5
-  retention_in_days                      = 365
-  log_monitoring_enabled                 = true
+  server_id              = azurerm_mssql_server.phi.id
+  storage_endpoint       = null # wire to a storage account output from a logging module in Phase 5
+  retention_in_days      = 365
+  log_monitoring_enabled = true
 }
 
 output "sql_server_id" {
